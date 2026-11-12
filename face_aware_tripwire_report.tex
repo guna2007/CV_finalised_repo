@@ -1,0 +1,131 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=24mm]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
+
+\hypersetup{
+  pdftitle={Face-Aware Tripwire Surveillance},
+  pdfauthor={Guna, Susan, Vivek}
+}
+
+\begin{document}
+
+\begin{center}
+  {\LARGE Face-Aware Tripwire Surveillance\par}
+  \smallskip
+  {\large Computer Vision Laboratory Project Report\par}
+  \medskip
+  \begin{tabular}{ccc}
+    Guna & Susan & Vivek \\
+    \texttt{cs24b2043} & \texttt{cs23b20xx} & \texttt{cs2310xx}
+  \end{tabular}
+\end{center}
+
+\begin{abstract}
+This project detects when a tracked person enters or exits a rectangular region in recorded video. For each confirmed entry, it compares usable face observations with an enrolled reference. A clear non-match produces a JPEG alert. In the demonstration, the system recorded one match, one non-match, one unverified entry and one exit. The non-matching track generated one alert during its visit. The unverified entry came from a replay with the face area deliberately covered.
+\end{abstract}
+
+\section{Methodology}
+
+\begin{center}
+  \small Detection and tracking \(\rightarrow\) Crossing confirmation
+  \(\rightarrow\) Face comparison \(\rightarrow\) Event and alert
+\end{center}
+
+\subsection{Person detection and tracking}
+
+YOLO11n provides person detections \cite{yolo}. The compact pretrained detector was chosen for the CPU demonstration. Inference uses a 640-pixel input size setting and a confidence floor of 0.15. ByteTrack associates boxes across frames and can use lower-confidence detections to continue an existing track \cite{bytetrack}. Each clip starts with a fresh tracker. Event identifiers combine the clip number with the tracker ID so that IDs from different clips remain distinct.
+
+\subsection{Crossing detection}
+
+The bottom-center point of a tracked box approximates the person's position. The code classifies that point as inside, outside, or within a five-pixel band around the region edges. The lower edge coincides with the image boundary and is excluded from the crossing test. Three consecutive observations beyond the band establish the initial side or confirm a transition. A missing observation or a point in the band interrupts the candidate streak.
+
+An outside-to-inside transition creates a pending entry. The final decision remains associated with that visit. A confirmed exit clears the decision and allows a later entry. This state prevents repeated events while the same track remains inside.
+
+\subsection{Face detection and enrollment}
+
+YuNet detects the face and returns five landmarks. For each tracked person, the face search uses the upper 55\% of the person box. The notebook requires one centered detection at confidence 0.80 or higher, at least 34 pixels in both dimensions, and grayscale Laplacian variance of at least 15. SFace uses the landmarks to align the crop and produces a unit-normalized embedding \cite{opencv}. Enrollment stores an alias and embedding in memory.
+
+\clearpage
+\subsection{Similarity, decisions and alerts}
+
+For each entry, the notebook samples alternate frames from the same track, up to eight frames before and ten after confirmation. For unit embeddings \(u_i\) from a track and \(v_a\) for an enrolled alias \(a\), their cosine similarity is \(s_{ia}=u_i^\mathsf{T}v_a\). A decision needs at least three usable observations. With \(n\) observations, the agreement rule requires at least \(\lceil 2n/3\rceil\) qualifying samples.
+
+\begin{itemize}
+  \item \textbf{Match.} The best alias has a median score of at least 0.48. Each qualifying sample scores at least 0.48 for that alias and leads every rival by at least 0.08.
+  \item \textbf{Non-match.} Each qualifying sample scores at or below 0.30 against every enrolled alias.
+  \item \textbf{Unverified.} The gallery is empty, too few observations pass the quality checks, or the scores fail both decision rules.
+\end{itemize}
+
+The cutoffs bracket the SFace reference cosine of 0.363 reported by OpenCV for LFW \cite{opencv}. The interval allows the system to leave ambiguous entries unverified. These demonstration cutoffs have yet to be calibrated on independent footage.
+
+For a clear non-match, the code draws the region, person box and timestamps on the saved entry frame. The event table and JPEG record the crossing confirmation time. The overlay shows the classification when the sampling window closes. The output also includes a silent H.264 MP4 and a JSON summary.
+
+\section{Reproducing the Demonstration}
+
+Open the \href{https://colab.research.google.com/github/guna2007/CV_finalised_repo/blob/main/face_aware_tripwire.ipynb}{Colab notebook}. Keep CPU and built-in enrollment selected, leave photo upload disabled, and choose \textbf{Run all} from the \textbf{Runtime} menu. Setup downloads the footage and model files and checks their SHA-256 digests. To save the displayed JPEG, set the alert number to 1 and run the download cell.
+
+The Intel IoT DevKit source \cite{intel} is 768 by 432 pixels at 12 frames per second. The region runs from \((285,290)\) to \((405,431)\). Frame 996 at 83.00\,s enrolls the pseudonymous Person A, using a reference window from 82.00 to 84.00\,s. The playback joins the following half-open intervals in order.
+
+\begin{center}
+\begin{tabular}{@{}llp{0.51\linewidth}@{}}
+  \toprule
+  Clip & Source interval (s) & Purpose \\
+  \midrule
+  A & 74.50--81.00 & Observe the enrolled person entering. \\
+  B & 3.25--19.83 & Observe another person entering, waiting and exiting. \\
+  A, derived & 74.50--80.00 & Repeat the entry with the top 41\% of each tracked box covered after tracking and before face detection. \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\clearpage
+\section{Results and Discussion}
+
+The recorded run processed 343 frames in 37.4 seconds (9.2 frames per second) in a fresh local Windows Jupyter CPU kernel. The timing includes video encoding and excludes setup and downloads.
+
+\begin{table}[!ht]
+  \centering
+  \caption{Confirmed crossings in the default run.}
+  \label{tab:crossings}
+  \begin{tabular}{@{}rrllrr@{}}
+    \toprule
+    Video (s) & Source (s) & Track & Event and decision & Median cosine & Faces \\
+    \midrule
+    2.83 & 77.33 & 1.1 & Entry, match (Person A) & 0.571 & 7 \\
+    8.92 & 5.67 & 2.1 & Entry, non-match & 0.011 & 5 \\
+    22.17 & 18.92 & 2.1 & Exit, rearmed & --- & --- \\
+    25.92 & 77.33 & 3.1 & Entry, unverified (derived) & --- & 0 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The match and non-match medians in Table~\ref{tab:crossings} fall on opposite sides of the decision interval. Track 2.1 stayed inside for 159 observed frames and generated one JPEG before its confirmed exit. The derived replay yielded zero usable face observations and no alert. A separate test used simulated side observations to verify re-entry after exit.
+
+\section{Limitations and Future Work}
+
+The reference and evaluation clips come from the same recording and camera. The derived occlusion tests how the system handles missing face evidence under a controlled edit. Box cropping can shift the position proxy, and missed detections or ID switches can interrupt a visit. A different camera angle or lighting condition can change face quality and similarity.
+
+A follow-up study should use independent recordings and report missed crossings, false alerts and the fraction of unverified entries. Held-out recordings could be used to calibrate the similarity thresholds and compare the box bottom with a calibrated ground-plane position.
+
+\section{Team Contributions}
+
+\noindent\textbf{Guna (\texttt{cs24b2043}).} YuNet face detection, enrollment, SFace embeddings and decision rules.
+
+\noindent\textbf{Susan (\texttt{cs23b20xx}).} Demo integration, annotated outputs, verification and documentation.
+
+\noindent\textbf{Vivek (\texttt{cs2310xx}).} Person detection, ByteTrack, region geometry and crossing state.
+
+\section*{Acknowledgments}
+
+Intel IoT DevKit supplied the footage under \href{https://creativecommons.org/licenses/by/4.0/}{CC BY 4.0}. The project uses excerpts, annotated frames and a labeled occlusion replay. The models and tracking method are credited below.
+
+\begin{thebibliography}{9}
+\bibitem{intel} Intel IoT DevKit. \href{https://github.com/intel-iot-devkit/sample-videos/blob/master/face-demographics-walking-and-pause.mp4}{Face demographics: walking and pause}. Sample video.
+\bibitem{yolo} Ultralytics. \href{https://docs.ultralytics.com/models/yolo11/}{YOLO11 model documentation}.
+\bibitem{bytetrack} Y. Zhang et al. \href{https://arxiv.org/abs/2110.06864}{ByteTrack: Multi-Object Tracking by Associating Every Detection Box}. ECCV, 2022.
+\bibitem{opencv} OpenCV. \href{https://docs.opencv.org/4.x/d0/dd4/tutorial_dnn_face.html}{DNN-based Face Detection and Recognition}. YuNet and SFace tutorial.
+\end{thebibliography}
+
+\end{document}
